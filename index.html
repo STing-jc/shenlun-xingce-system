@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>申论行测学习系统</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="auth.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 侧边栏 -->
+        <aside class="sidebar">
+            <div class="logo">
+                <h2><i class="fas fa-graduation-cap"></i> 学习系统</h2>
+            </div>
+            
+            <!-- 分类导航 -->
+            <nav class="category-nav">
+                <div class="category-group">
+                    <h3 class="category-title" data-category="申论">
+                        <i class="fas fa-file-alt"></i> 申论
+                        <i class="fas fa-chevron-down toggle-icon"></i>
+                    </h3>
+                    <ul class="subcategory-list">
+                        <li data-subcategory="概括归纳">概括归纳</li>
+                        <li data-subcategory="提出对策">提出对策</li>
+                        <li data-subcategory="分析原因">分析原因</li>
+                        <li data-subcategory="综合分析">综合分析</li>
+                        <li data-subcategory="公文写作">公文写作</li>
+                        <li data-subcategory="大作文">大作文</li>
+                    </ul>
+                </div>
+                
+                <div class="category-group">
+                    <h3 class="category-title" data-category="行测">
+                        <i class="fas fa-calculator"></i> 行测
+                        <i class="fas fa-chevron-down toggle-icon"></i>
+                    </h3>
+                    <ul class="subcategory-list">
+                        <li data-subcategory="政治常识">政治常识</li>
+                        <li data-subcategory="常识">常识</li>
+                        <li data-subcategory="言语">言语</li>
+                        <li data-subcategory="数量">数量</li>
+                        <li data-subcategory="判断">判断</li>
+                        <li data-subcategory="资料">资料</li>
+                    </ul>
+                </div>
+            </nav>
+            
+            <!-- 历史记录 -->
+            <div class="history-section">
+                <h3><i class="fas fa-history"></i> 历史记录</h3>
+                <ul id="historyList" class="history-list"></ul>
+            </div>
+            
+            <!-- 标签管理 -->
+            <div class="tags-section">
+                <h3><i class="fas fa-tags"></i> 标签管理</h3>
+                <div class="tag-input">
+                    <input type="text" id="newTag" placeholder="添加新标签">
+                    <button id="addTagBtn"><i class="fas fa-plus"></i></button>
+                </div>
+                <div id="tagsList" class="tags-list"></div>
+            </div>
+        </aside>
+        
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 题目列表页面 -->
+            <div id="questionListPage" class="page active">
+                <div class="page-header">
+                    <h1>题目列表</h1>
+                    <div class="header-actions">
+                        <button id="importDocBtn" class="btn btn-primary">
+                            <i class="fas fa-upload"></i> 导入文档
+                        </button>
+                        <button id="newQuestionBtn" class="btn btn-success">
+                            <i class="fas fa-plus"></i> 新建题目
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="filters">
+                    <select id="categoryFilter">
+                        <option value="">所有分类</option>
+                        <option value="申论">申论</option>
+                        <option value="行测">行测</option>
+                    </select>
+                    <select id="subcategoryFilter">
+                        <option value="">所有子分类</option>
+                    </select>
+                    <input type="text" id="searchInput" placeholder="搜索题目...">
+                </div>
+                
+                <div id="questionsList" class="questions-grid"></div>
+            </div>
+            
+            <!-- 题目详情页面 -->
+            <div id="questionDetailPage" class="page">
+                <div class="page-header">
+                    <button id="backToListBtn" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i> 返回列表
+                    </button>
+                    <div class="question-info">
+                        <h1 id="questionTitle"></h1>
+                        <div class="question-meta">
+                            <span id="questionCategory" class="category-badge"></span>
+                            <span id="questionSubcategory" class="subcategory-badge"></span>
+                        </div>
+                    </div>
+                    <div class="header-actions">
+                        <div class="mode-toggle">
+                            <button id="editModeBtn" class="btn btn-outline active">编辑模式</button>
+                            <button id="readModeBtn" class="btn btn-outline">阅读模式</button>
+                        </div>
+                        <button id="deleteQuestionBtn" class="btn btn-danger">
+                            <i class="fas fa-trash"></i> 删除题目
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="content-layout">
+                    <!-- 左侧内容区 -->
+                    <div class="left-panel">
+                        <!-- 题目区域 -->
+                        <section class="content-section question-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-file-text"></i> 题目内容</h3>
+                                <div class="highlight-tools" id="highlightTools">
+                                    <button class="highlight-btn" data-color="yellow">黄色</button>
+                                    <button class="highlight-btn" data-color="green">绿色</button>
+                                    <button class="highlight-btn" data-color="blue">蓝色</button>
+                                    <button class="highlight-btn" data-color="red">红色</button>
+                                    <button class="clear-highlight-btn">清除</button>
+                                </div>
+                            </div>
+                            <div id="questionContent" class="editable-content" contenteditable="true"></div>
+                        </section>
+                        
+                        <!-- 总结区域 -->
+                        <section class="content-section summary-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-list-ul"></i> 总结</h3>
+                            </div>
+                            <div id="summaryContent" class="editable-content" contenteditable="true" placeholder="在此输入总结内容..."></div>
+                        </section>
+                        
+                        <!-- 范文区域 -->
+                        <section class="content-section example-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-star"></i> 范文</h3>
+                            </div>
+                            <div id="exampleContent" class="editable-content" contenteditable="true" placeholder="在此输入范文内容..."></div>
+                        </section>
+                        
+                        <!-- 全文思路区域 -->
+                        <section class="content-section thinking-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-lightbulb"></i> 全文思路</h3>
+                                <button id="showThinkingBtn" class="btn btn-sm">显示思路</button>
+                            </div>
+                            <div id="thinkingContent" class="editable-content hidden" contenteditable="true" placeholder="在此输入全文思路..."></div>
+                        </section>
+                        
+                        <!-- 笔记区域 -->
+                        <section class="content-section notes-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-sticky-note"></i> 笔记</h3>
+                            </div>
+                            <div id="notesContent" class="editable-content" contenteditable="true" placeholder="在此记录笔记..."></div>
+                        </section>
+                    </div>
+                    
+                    <!-- 右侧批注区域 -->
+                    <div class="right-panel">
+                        <section class="annotations-section">
+                            <div class="section-header">
+                                <h3><i class="fas fa-comment"></i> 批注</h3>
+                            </div>
+                            <div id="annotationsContainer" class="annotations-container">
+                                <div class="no-annotations">点击高亮文字查看批注</div>
+                            </div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- 模态框 -->
+    <div id="annotationModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>添加批注</h3>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="annotationText" placeholder="输入批注内容..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button id="saveAnnotationBtn" class="btn btn-primary">保存</button>
+                <button id="cancelAnnotationBtn" class="btn btn-secondary">取消</button>
+            </div>
+        </div>
+    </div>
+    
+    <input type="file" id="fileInput" accept=".txt,.doc,.docx,.pdf" style="display: none;">
+    
+    <script src="auth.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
