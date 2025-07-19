@@ -1,0 +1,396 @@
+# 申论行测学习系统 - 告警规则配置
+# 版本: v2.0.0
+# 描述: 应用监控告警规则定义
+
+groups:
+  # ========================================================================
+  # 应用服务告警
+  # ========================================================================
+  
+  - name: shenlun-app-alerts
+    rules:
+      # 应用服务下线告警
+      - alert: AppServiceDown
+        expr: up{job="shenlun-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: shenlun-app
+          category: availability
+        annotations:
+          summary: "申论行测学习系统服务下线"
+          description: "应用服务已下线超过1分钟，请立即检查服务状态。\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/app-service-down"
+      
+      # 高错误率告警
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="shenlun-app",code=~"5.."}[5m])) /
+            sum(rate(http_requests_total{job="shenlun-app"}[5m]))
+          ) * 100 > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: shenlun-app
+          category: performance
+        annotations:
+          summary: "应用错误率过高"
+          description: "应用5xx错误率超过5%，当前值: {{ $value | humanizePercentage }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-error-rate"
+      
+      # 响应时间过长告警
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95, 
+            rate(http_request_duration_ms_bucket{job="shenlun-app"}[5m])
+          ) > 2000
+        for: 10m
+        labels:
+          severity: warning
+          service: shenlun-app
+          category: performance
+        annotations:
+          summary: "应用响应时间过长"
+          description: "应用95%响应时间超过2秒，当前值: {{ $value }}ms\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-response-time"
+      
+      # 请求量异常告警
+      - alert: RequestVolumeAnomaly
+        expr: |
+          (
+            rate(http_requests_total{job="shenlun-app"}[5m]) < 
+            rate(http_requests_total{job="shenlun-app"}[5m] offset 1h) * 0.5
+          ) and 
+          rate(http_requests_total{job="shenlun-app"}[5m] offset 1h) > 1
+        for: 15m
+        labels:
+          severity: warning
+          service: shenlun-app
+          category: traffic
+        annotations:
+          summary: "请求量异常下降"
+          description: "应用请求量比1小时前下降超过50%，可能存在问题\n当前值: {{ $value }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/request-volume-anomaly"
+      
+      # 内存使用率过高告警
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            process_resident_memory_bytes{job="shenlun-app"} / 
+            (1024 * 1024 * 1024)
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: shenlun-app
+          category: resource
+        annotations:
+          summary: "应用内存使用率过高"
+          description: "应用内存使用超过1GB，当前值: {{ $value | humanizeBytes }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-memory-usage"
+      
+      # CPU使用率过高告警
+      - alert: HighCPUUsage
+        expr: |
+          rate(process_cpu_user_seconds_total{job="shenlun-app"}[5m]) * 100 > 80
+        for: 15m
+        labels:
+          severity: warning
+          service: shenlun-app
+          category: resource
+        annotations:
+          summary: "应用CPU使用率过高"
+          description: "应用CPU使用率超过80%，当前值: {{ $value | humanizePercentage }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-cpu-usage"
+  
+  # ========================================================================
+  # 系统资源告警
+  # ========================================================================
+  
+  - name: system-alerts
+    rules:
+      # 磁盘空间不足告警
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            node_filesystem_avail_bytes{mountpoint="/"} / 
+            node_filesystem_size_bytes{mountpoint="/"}
+          ) * 100 < 15
+        for: 5m
+        labels:
+          severity: warning
+          service: system
+          category: storage
+        annotations:
+          summary: "磁盘空间不足"
+          description: "根分区可用空间低于15%，当前值: {{ $value | humanizePercentage }}\n主机: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/disk-space-low"
+      
+      # 磁盘空间严重不足告警
+      - alert: DiskSpaceCritical
+        expr: |
+          (
+            node_filesystem_avail_bytes{mountpoint="/"} / 
+            node_filesystem_size_bytes{mountpoint="/"}
+          ) * 100 < 5
+        for: 1m
+        labels:
+          severity: critical
+          service: system
+          category: storage
+        annotations:
+          summary: "磁盘空间严重不足"
+          description: "根分区可用空间低于5%，系统可能无法正常运行\n当前值: {{ $value | humanizePercentage }}\n主机: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/disk-space-critical"
+      
+      # 系统负载过高告警
+      - alert: HighSystemLoad
+        expr: node_load15 > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          category: performance
+        annotations:
+          summary: "系统负载过高"
+          description: "系统15分钟平均负载超过2，当前值: {{ $value }}\n主机: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-system-load"
+      
+      # 系统内存不足告警
+      - alert: HighMemoryPressure
+        expr: |
+          (
+            (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / 
+            node_memory_MemTotal_bytes
+          ) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+          service: system
+          category: resource
+        annotations:
+          summary: "系统内存使用率过高"
+          description: "系统内存使用率超过85%，当前值: {{ $value | humanizePercentage }}\n主机: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/high-memory-pressure"
+  
+  # ========================================================================
+  # 数据库告警
+  # ========================================================================
+  
+  - name: database-alerts
+    rules:
+      # PostgreSQL服务下线告警
+      - alert: PostgreSQLDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: postgresql
+          category: availability
+        annotations:
+          summary: "PostgreSQL数据库服务下线"
+          description: "PostgreSQL数据库服务已下线超过1分钟\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/postgresql-down"
+      
+      # 数据库连接数过多告警
+      - alert: PostgreSQLTooManyConnections
+        expr: |
+          pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: postgresql
+          category: resource
+        annotations:
+          summary: "PostgreSQL连接数过多"
+          description: "PostgreSQL连接数超过最大连接数的80%\n当前连接数: {{ $value }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/postgresql-too-many-connections"
+      
+      # 数据库查询时间过长告警
+      - alert: PostgreSQLSlowQueries
+        expr: |
+          rate(pg_stat_database_tup_returned[5m]) / 
+          rate(pg_stat_database_tup_fetched[5m]) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: postgresql
+          category: performance
+        annotations:
+          summary: "PostgreSQL查询效率低下"
+          description: "PostgreSQL查询效率低于10%，可能存在慢查询\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/postgresql-slow-queries"
+  
+  # ========================================================================
+  # Redis告警
+  # ========================================================================
+  
+  - name: redis-alerts
+    rules:
+      # Redis服务下线告警
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: redis
+          category: availability
+        annotations:
+          summary: "Redis缓存服务下线"
+          description: "Redis缓存服务已下线超过1分钟\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/redis-down"
+      
+      # Redis内存使用率过高告警
+      - alert: RedisHighMemoryUsage
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+          category: resource
+        annotations:
+          summary: "Redis内存使用率过高"
+          description: "Redis内存使用率超过85%，当前值: {{ $value | humanizePercentage }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/redis-high-memory-usage"
+      
+      # Redis连接数过多告警
+      - alert: RedisTooManyConnections
+        expr: redis_connected_clients > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+          category: resource
+        annotations:
+          summary: "Redis连接数过多"
+          description: "Redis连接数超过100，当前值: {{ $value }}\n实例: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/redis-too-many-connections"
+  
+  # ========================================================================
+  # 网络和SSL告警
+  # ========================================================================
+  
+  - name: network-alerts
+    rules:
+      # 网站无法访问告警
+      - alert: WebsiteDown
+        expr: probe_success{job="blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: website
+          category: availability
+        annotations:
+          summary: "网站无法访问"
+          description: "网站 {{ $labels.instance }} 无法访问超过2分钟"
+          runbook_url: "https://docs.example.com/runbooks/website-down"
+      
+      # SSL证书即将过期告警
+      - alert: SSLCertificateExpiringSoon
+        expr: |
+          (probe_ssl_earliest_cert_expiry - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+          service: ssl
+          category: security
+        annotations:
+          summary: "SSL证书即将过期"
+          description: "SSL证书将在 {{ $value }} 天后过期\n域名: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/ssl-certificate-expiring"
+      
+      # SSL证书即将过期（紧急）
+      - alert: SSLCertificateExpiringSoonCritical
+        expr: |
+          (probe_ssl_earliest_cert_expiry - time()) / 86400 < 7
+        for: 1h
+        labels:
+          severity: critical
+          service: ssl
+          category: security
+        annotations:
+          summary: "SSL证书即将过期（紧急）"
+          description: "SSL证书将在 {{ $value }} 天后过期，请立即更新\n域名: {{ $labels.instance }}"
+          runbook_url: "https://docs.example.com/runbooks/ssl-certificate-expiring-critical"
+      
+      # 网站响应时间过长告警
+      - alert: WebsiteSlowResponse
+        expr: probe_duration_seconds{job="blackbox-http"} > 5
+        for: 5m
+        labels:
+          severity: warning
+          service: website
+          category: performance
+        annotations:
+          summary: "网站响应时间过长"
+          description: "网站 {{ $labels.instance }} 响应时间超过5秒\n当前值: {{ $value }}秒"
+          runbook_url: "https://docs.example.com/runbooks/website-slow-response"
+  
+  # ========================================================================
+  # 业务指标告警
+  # ========================================================================
+  
+  - name: business-alerts
+    rules:
+      # 用户登录失败率过高告警
+      - alert: HighLoginFailureRate
+        expr: |
+          (
+            sum(rate(login_attempts_total{status="failed"}[5m])) /
+            sum(rate(login_attempts_total[5m]))
+          ) * 100 > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: auth
+          category: security
+        annotations:
+          summary: "用户登录失败率过高"
+          description: "用户登录失败率超过20%，可能存在安全问题\n当前值: {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.example.com/runbooks/high-login-failure-rate"
+      
+      # 新用户注册异常告警
+      - alert: UserRegistrationAnomaly
+        expr: |
+          rate(user_registrations_total[1h]) > 
+          rate(user_registrations_total[1h] offset 24h) * 5
+        for: 30m
+        labels:
+          severity: warning
+          service: user
+          category: business
+        annotations:
+          summary: "用户注册数量异常"
+          description: "用户注册数量比24小时前增长超过5倍，请检查是否存在异常\n当前值: {{ $value }}"
+          runbook_url: "https://docs.example.com/runbooks/user-registration-anomaly"
+      
+      # 数据同步失败告警
+      - alert: DataSyncFailure
+        expr: |
+          rate(data_sync_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: data-sync
+          category: business
+        annotations:
+          summary: "数据同步失败"
+          description: "数据同步出现错误，请检查同步服务状态\n错误率: {{ $value }}"
+          runbook_url: "https://docs.example.com/runbooks/data-sync-failure"
+      
+      # 题目数据异常告警
+      - alert: QuestionDataAnomaly
+        expr: |
+          increase(questions_created_total[1h]) == 0 and 
+          hour() >= 9 and hour() <= 18
+        for: 2h
+        labels:
+          severity: warning
+          service: content
+          category: business
+        annotations:
+          summary: "题目创建异常"
+          description: "工作时间内2小时无新题目创建，可能存在问题"
+          runbook_url: "https://docs.example.com/runbooks/question-data-anomaly"

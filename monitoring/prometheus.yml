@@ -1,0 +1,323 @@
+# 申论行测学习系统 - Prometheus监控配置
+# 版本: v2.0.0
+# 描述: Prometheus服务发现和监控配置
+
+# ============================================================================
+# 全局配置
+# ============================================================================
+
+global:
+  # 数据采集间隔
+  scrape_interval: 15s
+  
+  # 规则评估间隔
+  evaluation_interval: 15s
+  
+  # 外部标签（用于联邦和远程存储）
+  external_labels:
+    cluster: 'shenlun-system'
+    environment: 'production'
+    region: 'default'
+
+# ============================================================================
+# 告警规则配置
+# ============================================================================
+
+rule_files:
+  - "rules/*.yml"
+  - "alerts/*.yml"
+
+# ============================================================================
+# 告警管理器配置
+# ============================================================================
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+      timeout: 10s
+      api_version: v2
+
+# ============================================================================
+# 数据采集配置
+# ============================================================================
+
+scrape_configs:
+  # ========================================================================
+  # Prometheus自监控
+  # ========================================================================
+  
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    
+  # ========================================================================
+  # 应用监控
+  # ========================================================================
+  
+  # Node.js应用监控
+  - job_name: 'shenlun-app'
+    static_configs:
+      - targets: ['app:3000']
+    scrape_interval: 10s
+    metrics_path: /api/metrics
+    scrape_timeout: 5s
+    
+    # 自定义标签
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'shenlun-app'
+      - target_label: service
+        replacement: 'shenlun-xingce-system'
+      - target_label: component
+        replacement: 'backend'
+    
+    # 指标重写
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'nodejs_(.*)'
+        target_label: __name__
+        replacement: 'app_nodejs_${1}'
+  
+  # 应用健康检查
+  - job_name: 'shenlun-app-health'
+    static_configs:
+      - targets: ['app:3000']
+    scrape_interval: 30s
+    metrics_path: /api/health
+    scrape_timeout: 10s
+    
+  # ========================================================================
+  # 基础设施监控
+  # ========================================================================
+  
+  # Node Exporter (系统指标)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'server-01'
+      - target_label: service
+        replacement: 'system'
+      - target_label: component
+        replacement: 'node'
+  
+  # cAdvisor (容器指标)
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'containers'
+      - target_label: component
+        replacement: 'cadvisor'
+  
+  # ========================================================================
+  # 数据库监控
+  # ========================================================================
+  
+  # PostgreSQL监控
+  - job_name: 'postgres-exporter'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'database'
+      - target_label: component
+        replacement: 'postgresql'
+  
+  # Redis监控
+  - job_name: 'redis-exporter'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 30s
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'cache'
+      - target_label: component
+        replacement: 'redis'
+  
+  # ========================================================================
+  # Web服务器监控
+  # ========================================================================
+  
+  # Nginx监控
+  - job_name: 'nginx-exporter'
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+    scrape_interval: 15s
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'webserver'
+      - target_label: component
+        replacement: 'nginx'
+  
+  # Nginx VTS监控
+  - job_name: 'nginx-vts'
+    static_configs:
+      - targets: ['nginx:80']
+    scrape_interval: 15s
+    metrics_path: /status/format/prometheus
+    
+  # ========================================================================
+  # 黑盒监控
+  # ========================================================================
+  
+  # HTTP端点监控
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+        - https://your-domain.com
+        - https://your-domain.com/api/health
+        - https://your-domain.com/api/auth/status
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'endpoint'
+      - target_label: component
+        replacement: 'http'
+  
+  # HTTPS证书监控
+  - job_name: 'blackbox-ssl'
+    metrics_path: /probe
+    params:
+      module: [ssl_cert]
+    static_configs:
+      - targets:
+        - your-domain.com:443
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'ssl'
+      - target_label: component
+        replacement: 'certificate'
+  
+  # TCP端口监控
+  - job_name: 'blackbox-tcp'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+        - app:3000
+        - postgres:5432
+        - redis:6379
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: service
+        replacement: 'port'
+      - target_label: component
+        replacement: 'tcp'
+  
+  # ========================================================================
+  # 日志监控
+  # ========================================================================
+  
+  # Loki监控
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+    scrape_interval: 15s
+    
+  # Promtail监控
+  - job_name: 'promtail'
+    static_configs:
+      - targets: ['promtail:9080']
+    scrape_interval: 15s
+  
+  # ========================================================================
+  # 自定义监控
+  # ========================================================================
+  
+  # 业务指标监控
+  - job_name: 'business-metrics'
+    static_configs:
+      - targets: ['app:3000']
+    scrape_interval: 60s
+    metrics_path: /api/metrics/business
+    scrape_timeout: 30s
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'business'
+      - target_label: component
+        replacement: 'metrics'
+  
+  # 用户行为监控
+  - job_name: 'user-analytics'
+    static_configs:
+      - targets: ['app:3000']
+    scrape_interval: 300s  # 5分钟
+    metrics_path: /api/metrics/analytics
+    scrape_timeout: 60s
+    
+    relabel_configs:
+      - target_label: service
+        replacement: 'analytics'
+      - target_label: component
+        replacement: 'user-behavior'
+
+# ============================================================================
+# 远程写入配置（可选）
+# ============================================================================
+
+# remote_write:
+#   - url: "https://prometheus-remote-write-endpoint/api/v1/write"
+#     basic_auth:
+#       username: "your-username"
+#       password: "your-password"
+#     queue_config:
+#       max_samples_per_send: 1000
+#       max_shards: 200
+#       capacity: 2500
+
+# ============================================================================
+# 远程读取配置（可选）
+# ============================================================================
+
+# remote_read:
+#   - url: "https://prometheus-remote-read-endpoint/api/v1/read"
+#     basic_auth:
+#       username: "your-username"
+#       password: "your-password"
+
+# ============================================================================
+# 存储配置
+# ============================================================================
+
+# 本地存储保留时间
+# --storage.tsdb.retention.time=30d
+# --storage.tsdb.retention.size=10GB

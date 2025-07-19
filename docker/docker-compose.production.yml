@@ -1,0 +1,396 @@
+# 申论行测学习系统 - 生产环境Docker Compose配置
+# 版本: v2.0.0
+# 描述: 完整的生产环境容器化部署配置
+
+version: '3.8'
+
+services:
+  # Nginx反向代理服务
+  nginx:
+    image: nginx:1.24-alpine
+    container_name: ${APP_NAME:-shenlun-system}-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+      - app_static:/usr/share/nginx/html:ro
+    depends_on:
+      - app
+    networks:
+      - frontend
+      - backend
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx.rule=Host(`${DOMAIN:-localhost}`)"
+      - "traefik.http.routers.nginx.tls=true"
+      - "traefik.http.routers.nginx.tls.certresolver=letsencrypt"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Node.js应用服务
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.production
+      args:
+        - NODE_VERSION=${NODE_VERSION:-18}
+        - APP_ENV=production
+    image: ${APP_NAME:-shenlun-system}:${APP_VERSION:-latest}
+    container_name: ${APP_NAME:-shenlun-system}-app
+    restart: unless-stopped
+    expose:
+      - "3000"
+    volumes:
+      - app_data:/app/data
+      - app_logs:/app/logs
+      - app_uploads:/app/uploads
+      - app_backups:/app/backups
+      - app_static:/app/public
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - TZ=${TZ:-Asia/Shanghai}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-24h}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - DOMAIN=${DOMAIN:-localhost}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-10mb}
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-15}
+      - RATE_LIMIT_MAX=${RATE_LIMIT_MAX:-100}
+      - BACKUP_INTERVAL=${BACKUP_INTERVAL:-daily}
+      - BACKUP_RETENTION=${BACKUP_RETENTION:-30}
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=${DATABASE_URL:-}
+    networks:
+      - backend
+    depends_on:
+      - redis
+    labels:
+      - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # Redis缓存服务
+  redis:
+    image: redis:7-alpine
+    container_name: ${APP_NAME:-shenlun-system}-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+
+  # 数据库服务 (可选)
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${APP_NAME:-shenlun-system}-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-shenlun_system}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - TZ=${TZ:-Asia/Shanghai}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./backups/postgres:/backups
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-shenlun_system}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.2'
+          memory: 128M
+    profiles:
+      - database
+
+  # 监控服务
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ${APP_NAME:-shenlun-system}-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - monitoring
+      - backend
+    profiles:
+      - monitoring
+
+  # Grafana仪表板
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ${APP_NAME:-shenlun-system}-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - TZ=${TZ:-Asia/Shanghai}
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+  # 日志聚合服务
+  loki:
+    image: grafana/loki:latest
+    container_name: ${APP_NAME:-shenlun-system}-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitoring
+    profiles:
+      - monitoring
+
+  # 日志收集器
+  promtail:
+    image: grafana/promtail:latest
+    container_name: ${APP_NAME:-shenlun-system}-promtail
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - app_logs:/var/log/app:ro
+      - ./logs:/var/log/host:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - monitoring
+    depends_on:
+      - loki
+    profiles:
+      - monitoring
+
+  # 备份服务
+  backup:
+    build:
+      context: ../scripts
+      dockerfile: Dockerfile.backup
+    image: ${APP_NAME:-shenlun-system}-backup:latest
+    container_name: ${APP_NAME:-shenlun-system}-backup
+    restart: "no"
+    volumes:
+      - app_data:/data/app:ro
+      - postgres_data:/data/postgres:ro
+      - redis_data:/data/redis:ro
+      - app_backups:/backups
+      - ./scripts:/scripts:ro
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - BACKUP_RETENTION=${BACKUP_RETENTION:-30}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - S3_REGION=${S3_REGION:-}
+    networks:
+      - backend
+    profiles:
+      - backup
+
+  # SSL证书管理
+  certbot:
+    image: certbot/certbot:latest
+    container_name: ${APP_NAME:-shenlun-system}-certbot
+    restart: "no"
+    volumes:
+      - ./nginx/ssl:/etc/letsencrypt
+      - ./nginx/certbot-webroot:/var/www/certbot
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    command: certonly --webroot --webroot-path=/var/www/certbot --email ${ADMIN_EMAIL} --agree-tos --no-eff-email -d ${DOMAIN}
+    profiles:
+      - ssl
+
+# 网络配置
+networks:
+  frontend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  backend:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+  monitoring:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+
+# 数据卷配置
+volumes:
+  # 应用数据
+  app_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/app
+  
+  # 应用日志
+  app_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/logs
+  
+  # 文件上传
+  app_uploads:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/uploads
+  
+  # 备份数据
+  app_backups:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/backups
+  
+  # 静态文件
+  app_static:
+    driver: local
+  
+  # Redis数据
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/redis
+  
+  # PostgreSQL数据
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/postgres
+  
+  # Prometheus数据
+  prometheus_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/prometheus
+  
+  # Grafana数据
+  grafana_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/grafana
+  
+  # Loki数据
+  loki_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/loki
+
+# 扩展配置
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+    labels: "service"
+
+x-restart-policy: &default-restart-policy
+  restart: unless-stopped
+
+x-healthcheck-defaults: &default-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s

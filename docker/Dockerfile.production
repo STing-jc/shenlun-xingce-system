@@ -1,0 +1,285 @@
+# 申论行测学习系统 - 生产环境Dockerfile
+# 版本: v2.0.0
+# 描述: 多阶段构建的生产环境容器镜像
+
+# 构建参数
+ARG NODE_VERSION=18
+ARG APP_ENV=production
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# ============================================================================
+# 第一阶段: 构建阶段
+# ============================================================================
+FROM node:${NODE_VERSION}-alpine AS builder
+
+# 设置构建参数
+ARG APP_ENV
+ARG NODE_VERSION
+
+# 添加标签
+LABEL stage=builder
+LABEL description="Build stage for Shenlun Xingce Learning System"
+
+# 设置工作目录
+WORKDIR /build
+
+# 安装构建依赖
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/cache/apk/*
+
+# 复制package文件
+COPY package*.json ./
+
+# 设置npm配置
+RUN npm config set registry https://registry.npmmirror.com/ && \
+    npm config set fund false && \
+    npm config set audit false
+
+# 安装依赖
+RUN npm ci --only=production --no-optional && \
+    npm cache clean --force
+
+# 复制源代码
+COPY . .
+
+# 创建必要的目录
+RUN mkdir -p data logs temp uploads backups
+
+# 设置权限
+RUN chmod +x scripts/*.sh 2>/dev/null || true
+
+# 清理不需要的文件
+RUN rm -rf \
+    .git \
+    .github \
+    .vscode \
+    .idea \
+    *.md \
+    .gitignore \
+    .dockerignore \
+    docker \
+    scripts/deploy*.sh \
+    node_modules/.cache \
+    npm-debug.log* \
+    yarn-debug.log* \
+    yarn-error.log*
+
+# ============================================================================
+# 第二阶段: 运行时阶段
+# ============================================================================
+FROM node:${NODE_VERSION}-alpine AS runtime
+
+# 设置构建参数
+ARG APP_ENV
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# 添加元数据标签
+LABEL maintainer="System Administrator <admin@example.com>" \
+      org.label-schema.name="Shenlun Xingce Learning System" \
+      org.label-schema.description="A comprehensive learning system for Chinese civil service exams" \
+      org.label-schema.version="${VERSION}" \
+      org.label-schema.build-date="${BUILD_DATE}" \
+      org.label-schema.vcs-ref="${VCS_REF}" \
+      org.label-schema.vcs-url="https://github.com/your-org/shenlun-xingce-system" \
+      org.label-schema.schema-version="1.0" \
+      org.opencontainers.image.title="Shenlun Xingce Learning System" \
+      org.opencontainers.image.description="A comprehensive learning system for Chinese civil service exams" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/your-org/shenlun-xingce-system"
+
+# 安装运行时依赖
+RUN apk add --no-cache \
+    dumb-init \
+    curl \
+    ca-certificates \
+    tzdata \
+    tini \
+    && rm -rf /var/cache/apk/*
+
+# 创建应用用户
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup -h /app -s /bin/sh
+
+# 设置工作目录
+WORKDIR /app
+
+# 从构建阶段复制应用文件
+COPY --from=builder --chown=appuser:appgroup /build ./
+
+# 创建数据目录并设置权限
+RUN mkdir -p \
+    /app/data \
+    /app/data/users_data \
+    /app/data/backups \
+    /app/logs \
+    /app/temp \
+    /app/uploads \
+    /app/backups \
+    && chown -R appuser:appgroup /app \
+    && chmod 755 /app \
+    && chmod 750 /app/data \
+    && chmod 755 /app/logs \
+    && chmod 755 /app/temp \
+    && chmod 755 /app/uploads \
+    && chmod 755 /app/backups
+
+# 设置环境变量
+ENV NODE_ENV=${APP_ENV} \
+    PORT=3000 \
+    TZ=Asia/Shanghai \
+    NPM_CONFIG_LOGLEVEL=warn \
+    NPM_CONFIG_PROGRESS=false \
+    NODE_OPTIONS="--max-old-space-size=512" \
+    UV_THREADPOOL_SIZE=4
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:3000/api/health || exit 1
+
+# 暴露端口
+EXPOSE 3000
+
+# 创建启动脚本
+RUN cat > /app/docker-entrypoint.sh << 'EOF'
+#!/bin/sh
+set -e
+
+# 等待依赖服务
+if [ -n "$WAIT_FOR" ]; then
+    echo "Waiting for dependencies: $WAIT_FOR"
+    for service in $WAIT_FOR; do
+        host=$(echo $service | cut -d: -f1)
+        port=$(echo $service | cut -d: -f2)
+        echo "Waiting for $host:$port..."
+        while ! nc -z $host $port; do
+            sleep 1
+        done
+        echo "$host:$port is ready"
+    done
+fi
+
+# 初始化数据目录
+if [ ! -f "/app/data/.initialized" ]; then
+    echo "Initializing data directory..."
+    
+    # 创建默认配置文件
+    if [ ! -f "/app/data/config.json" ] && [ -f "/app/config.json" ]; then
+        cp /app/config.json /app/data/config.json
+    fi
+    
+    # 创建用户数据文件
+    if [ ! -f "/app/data/users.json" ]; then
+        echo '[]' > /app/data/users.json
+    fi
+    
+    # 标记已初始化
+    touch /app/data/.initialized
+    echo "Data directory initialized"
+fi
+
+# 设置权限
+chown -R appuser:appgroup /app/data /app/logs /app/temp /app/uploads /app/backups
+
+# 运行应用
+echo "Starting Shenlun Xingce Learning System..."
+exec "$@"
+EOF
+
+# 设置启动脚本权限
+RUN chmod +x /app/docker-entrypoint.sh
+
+# 切换到应用用户
+USER appuser
+
+# 设置入口点和默认命令
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
+CMD ["node", "server.js"]
+
+# ============================================================================
+# 开发环境变体
+# ============================================================================
+FROM runtime AS development
+
+# 切换回root用户安装开发依赖
+USER root
+
+# 安装开发工具
+RUN apk add --no-cache \
+    vim \
+    nano \
+    htop \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# 安装开发依赖
+RUN npm install --only=development
+
+# 设置开发环境变量
+ENV NODE_ENV=development \
+    DEBUG=app:* \
+    LOG_LEVEL=debug
+
+# 切换回应用用户
+USER appuser
+
+# 开发环境命令
+CMD ["npm", "run", "dev"]
+
+# ============================================================================
+# 测试环境变体
+# ============================================================================
+FROM development AS test
+
+# 设置测试环境变量
+ENV NODE_ENV=test \
+    CI=true
+
+# 运行测试
+CMD ["npm", "test"]
+
+# ============================================================================
+# 安全扫描阶段
+# ============================================================================
+FROM runtime AS security-scan
+
+# 切换回root用户
+USER root
+
+# 安装安全扫描工具
+RUN npm install -g audit-ci retire
+
+# 运行安全扫描
+RUN npm audit --audit-level moderate || true
+RUN retire --path /app || true
+
+# 切换回应用用户
+USER appuser
+
+# ============================================================================
+# 最终生产镜像
+# ============================================================================
+FROM runtime AS final
+
+# 添加版本信息文件
+RUN echo "{ \"version\": \"${VERSION}\", \"buildDate\": \"${BUILD_DATE}\", \"vcsRef\": \"${VCS_REF}\" }" > /app/version.json
+
+# 最终检查
+RUN node --version && npm --version
+
+# 验证应用文件
+RUN test -f /app/server.js || (echo "server.js not found" && exit 1)
+RUN test -f /app/package.json || (echo "package.json not found" && exit 1)
+
+# 默认使用生产环境配置
+ENV NODE_ENV=production

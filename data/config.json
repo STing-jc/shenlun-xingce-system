@@ -1,0 +1,80 @@
+{
+  "version": "1.0.0",
+  "appName": "申论行测学习系统",
+  "categories": {
+    "申论": {
+      "name": "申论",
+      "icon": "fas fa-file-alt",
+      "subcategories": [
+        "概括归纳",
+        "提出对策",
+        "分析原因",
+        "综合分析",
+        "公文写作",
+        "大作文"
+      ]
+    },
+    "行测": {
+      "name": "行测",
+      "icon": "fas fa-calculator",
+      "subcategories": [
+        "政治常识",
+        "常识",
+        "言语",
+        "数量",
+        "判断",
+        "资料"
+      ]
+    }
+  },
+  "highlightColors": [
+    {
+      "name": "yellow",
+      "label": "黄色",
+      "background": "#fff3cd",
+      "border": "#ffeaa7"
+    },
+    {
+      "name": "green",
+      "label": "绿色",
+      "background": "#d4edda",
+      "border": "#00b894"
+    },
+    {
+      "name": "blue",
+      "label": "蓝色",
+      "background": "#cce5ff",
+      "border": "#0984e3"
+    },
+    {
+      "name": "red",
+      "label": "红色",
+      "background": "#f8d7da",
+      "border": "#e17055"
+    }
+  ],
+  "defaultTags": [
+    "重要",
+    "难点",
+    "易错",
+    "常考",
+    "技巧",
+    "模板",
+    "真题",
+    "练习"
+  ],
+  "settings": {
+    "autoSaveInterval": 1000,
+    "maxHistoryItems": 10,
+    "defaultCategory": "申论",
+    "defaultSubcategory": "概括归纳",
+    "enableAutoSave": true,
+    "showWelcomeMessage": true
+  },
+  "ui": {
+    "theme": "default",
+    "sidebarWidth": 300,
+    "contentPanelRatio": 0.7,
+    "annotationPanelRatio": 0.3
+  }
+}

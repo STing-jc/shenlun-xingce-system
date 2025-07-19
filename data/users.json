@@ -1,0 +1,12 @@
+[
+  {
+    "id": "admin_001",
+    "username": "admin",
+    "email": "admin@study.com",
+    "password": "$2a$10$EldxJAsFK1OYqyJb.cya2uuo1q9Hs6i83E7M3ONp6QLzvBUoo31SG",
+    "role": "admin",
+    "createdAt": "2025-07-19T04:46:57.656Z",
+    "lastLogin": "2025-07-19T04:57:29.887Z",
+    "isActive": true
+  }
+]
