@@ -197,8 +197,35 @@ router.delete('/questions/:questionId', authenticateToken, async (req, res) => {
     try {
         const { questionId } = req.params;
         
-        const questions = await readUserData(req.user.id, 'questions');
-        const questionToDelete = questions.find(q => q.id === questionId);
+        // 首先从当前用户的数据中查找题目
+        const userQuestions = await readUserData(req.user.id, 'questions');
+        let questionToDelete = userQuestions.find(q => q.id === questionId);
+        
+        // 如果当前用户没有这个题目，且是管理员，则查找所有用户的题目
+        if (!questionToDelete && req.user.isAdmin) {
+            // 管理员可以删除任何用户的题目，需要查找题目的实际创建者
+            const userDataDir = path.join(__dirname, '../data/users');
+            try {
+                const userDirs = await fs.readdir(userDataDir);
+                
+                for (const userId of userDirs) {
+                    try {
+                        const questions = await readUserData(userId, 'questions');
+                        const foundQuestion = questions.find(q => q.id === questionId);
+                        if (foundQuestion) {
+                            questionToDelete = foundQuestion;
+                            questionToDelete._originalUserId = userId; // 记录原始用户ID
+                            break;
+                        }
+                    } catch (error) {
+                        // 忽略读取单个用户数据的错误
+                        continue;
+                    }
+                }
+            } catch (error) {
+                console.warn('查找题目时出错:', error);
+            }
+        }
         
         if (!questionToDelete) {
             return res.status(404).json({ error: '题目不存在' });
@@ -214,16 +241,21 @@ router.delete('/questions/:questionId', authenticateToken, async (req, res) => {
             });
         }
         
-        const filteredQuestions = questions.filter(q => q.id !== questionId);
-        
-        await writeUserData(req.user.id, 'questions', filteredQuestions);
-        
-        // 同时删除相关的批注
-        try {
-            const annotationsPath = path.join(ANNOTATIONS_DIR, `${req.user.id}_${questionId}.json`);
-            await fs.unlink(annotationsPath);
-        } catch (error) {
-            // 批注文件可能不存在，忽略错误
+        // 如果是管理员删除题目，需要从所有用户的数据中删除
+        if (req.user.isAdmin) {
+            await deleteQuestionFromAllUsers(questionId);
+        } else {
+            // 普通用户只删除自己的题目
+            const filteredQuestions = userQuestions.filter(q => q.id !== questionId);
+            await writeUserData(req.user.id, 'questions', filteredQuestions);
+            
+            // 删除相关的批注
+            try {
+                const annotationsPath = path.join(ANNOTATIONS_DIR, `${req.user.id}_${questionId}.json`);
+                await fs.unlink(annotationsPath);
+            } catch (error) {
+                // 批注文件可能不存在，忽略错误
+            }
         }
         
         res.json({ message: '题目删除成功' });
@@ -233,6 +265,50 @@ router.delete('/questions/:questionId', authenticateToken, async (req, res) => {
         res.status(500).json({ error: '服务器内部错误' });
     }
 });
+
+// 从所有用户数据中删除指定题目（管理员功能）
+async function deleteQuestionFromAllUsers(questionId) {
+    const userDataDir = path.join(__dirname, '../data/users');
+    
+    try {
+        const userDirs = await fs.readdir(userDataDir);
+        
+        for (const userId of userDirs) {
+            try {
+                // 删除题目
+                const questions = await readUserData(userId, 'questions');
+                const filteredQuestions = questions.filter(q => q.id !== questionId);
+                
+                if (filteredQuestions.length !== questions.length) {
+                    await writeUserData(userId, 'questions', filteredQuestions);
+                }
+                
+                // 删除历史记录中的相关条目
+                const history = await readUserData(userId, 'history');
+                const filteredHistory = history.filter(h => h.id !== questionId);
+                
+                if (filteredHistory.length !== history.length) {
+                    await writeUserData(userId, 'history', filteredHistory);
+                }
+                
+                // 删除相关的批注文件
+                try {
+                    const annotationsPath = path.join(ANNOTATIONS_DIR, `${userId}_${questionId}.json`);
+                    await fs.unlink(annotationsPath);
+                } catch (error) {
+                    // 批注文件可能不存在，忽略错误
+                }
+                
+            } catch (error) {
+                console.warn(`处理用户 ${userId} 的数据时出错:`, error);
+                // 继续处理其他用户
+            }
+        }
+    } catch (error) {
+        console.error('删除题目时遍历用户目录出错:', error);
+        throw error;
+    }
+}
 
 // 获取历史记录
 router.get('/history', authenticateToken, async (req, res) => {
@@ -440,7 +516,76 @@ router.get('/stats', authenticateToken, async (req, res) => {
     }
 });
 
-// 初始化目录
+// 获取分类配置（管理员功能）
+router.get('/categories', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const configPath = path.join(__dirname, '../data/config.json');
+        
+        try {
+            const configData = await fs.readFile(configPath, 'utf8');
+            const config = JSON.parse(configData);
+            res.json(config.categories || getDefaultCategories());
+        } catch (error) {
+            // 如果配置文件不存在，返回默认分类
+            res.json(getDefaultCategories());
+        }
+        
+    } catch (error) {
+        console.error('获取分类配置错误:', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
+});
+
+// 保存分类配置（管理员功能）
+router.post('/categories', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { categories } = req.body;
+        
+        if (!categories || typeof categories !== 'object') {
+            return res.status(400).json({ error: '分类数据格式错误' });
+        }
+        
+        const configPath = path.join(__dirname, '../data/config.json');
+        
+        // 读取现有配置或创建新配置
+        let config = {};
+        try {
+            const configData = await fs.readFile(configPath, 'utf8');
+            config = JSON.parse(configData);
+        } catch (error) {
+            // 配置文件不存在，创建新的
+        }
+        
+        config.categories = categories;
+        config.updatedAt = new Date().toISOString();
+        config.updatedBy = req.user.id;
+        
+        await fs.writeFile(configPath, JSON.stringify(config, null, 2));
+        res.json({ message: '分类配置保存成功' });
+        
+    } catch (error) {
+        console.error('保存分类配置错误:', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
+});
+
+// 获取默认分类配置
+function getDefaultCategories() {
+    return {
+        '申论': {
+            name: '申论',
+            icon: 'fas fa-file-alt',
+            subcategories: ['概括归纳', '提出对策', '分析原因', '综合分析', '公文写作', '大作文']
+        },
+        '行测': {
+            name: '行测',
+            icon: 'fas fa-calculator',
+            subcategories: ['政治常识', '常识', '言语', '数量', '判断', '资料']
+        }
+    };
+}
+
+// 初始化时确保目录存在
 ensureDirectories();
 
 module.exports = router;

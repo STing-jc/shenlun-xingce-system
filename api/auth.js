@@ -190,6 +190,31 @@ router.get('/me', authenticateToken, async (req, res) => {
     }
 });
 
+// 获取指定用户信息（仅返回基本信息）
+router.get('/users/:userId', authenticateToken, async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const users = await readUsers();
+        const user = users.find(u => u.id === userId);
+        
+        if (!user) {
+            return res.status(404).json({ error: '用户不存在' });
+        }
+        
+        // 只返回基本信息
+        const userInfo = {
+            id: user.id,
+            username: user.username,
+            role: user.role
+        };
+        res.json(userInfo);
+        
+    } catch (error) {
+        console.error('获取用户信息错误:', error);
+        res.status(500).json({ error: '服务器内部错误' });
+    }
+});
+
 // 管理员：获取所有用户
 router.get('/users', authenticateToken, requireAdmin, async (req, res) => {
     try {

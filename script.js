@@ -17,6 +17,12 @@ class StudySystem {
         }, 100);
     }
     
+    // 检查用户是否有权限查看题目
+    canViewQuestion(question) {
+        // 所有用户都可以查看所有题目
+        return true;
+    }
+    
     // 检查用户是否有权限编辑题目
     canEditQuestion(question) {
         if (!window.authManager || !window.authManager.isLoggedIn()) {
@@ -34,31 +40,31 @@ class StudySystem {
     
     // 检查用户是否有权限删除题目
     canDeleteQuestion(question) {
-        return this.canEditQuestion(question);
-    }
-    
-    // 检查用户是否有权限查看题目
-    canViewQuestion(question) {
         if (!window.authManager || !window.authManager.isLoggedIn()) {
             return false;
         }
         
-        // 管理员可以查看所有题目
+        // 管理员可以删除所有题目
         if (window.authManager.isAdmin()) {
             return true;
         }
         
-        // 普通用户可以查看自己的题目和公开题目
-        return question.createdBy === window.authManager.user.id || question.isPublic;
+        // 普通用户只能删除自己创建的题目
+        const currentUserId = window.authManager.user.id;
+        return question.createdBy === currentUserId;
     }
     
-    init() {
+    async init() {
         this.bindEvents();
         this.renderQuestionsList();
         this.renderHistory();
         this.renderTags();
         this.setupAutoSave();
-        this.initCategoryNavigation();
+        await this.renderCategoryNavigation();
+        await this.initCategoryNavigation();
+        this.initCategoryManagement();
+        await this.updateCategoryFilters();
+        this.updateUIForUserRole();
     }
     
     // 事件绑定
@@ -132,6 +138,22 @@ class StudySystem {
             }
         });
         
+        // 保存题目
+        document.getElementById('saveQuestionBtn').addEventListener('click', () => {
+            this.saveCurrentQuestion();
+            // 显示保存成功提示
+            const saveBtn = document.getElementById('saveQuestionBtn');
+            const originalText = saveBtn.innerHTML;
+            saveBtn.innerHTML = '<i class="fas fa-check"></i> 已保存';
+            saveBtn.classList.add('btn-success');
+            saveBtn.classList.remove('btn-primary');
+            setTimeout(() => {
+                saveBtn.innerHTML = originalText;
+                saveBtn.classList.remove('btn-success');
+                saveBtn.classList.add('btn-primary');
+            }, 2000);
+        });
+
         // 删除题目
         document.getElementById('deleteQuestionBtn').addEventListener('click', () => {
             this.deleteCurrentQuestion();
@@ -159,19 +181,32 @@ class StudySystem {
     }
     
     // 分类导航初始化
-    initCategoryNavigation() {
+    async initCategoryNavigation() {
+        // 等待DOM更新完成
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         document.querySelectorAll('.category-title').forEach(title => {
-            title.addEventListener('click', () => {
+            title.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
                 const subcategoryList = title.nextElementSibling;
                 const isActive = title.classList.contains('active');
                 
-                // 关闭所有其他分类
-                document.querySelectorAll('.category-title').forEach(t => {
-                    t.classList.remove('active');
-                    t.nextElementSibling.classList.remove('active');
-                });
-                
-                if (!isActive) {
+                // 切换当前分类的展开状态
+                if (isActive) {
+                    title.classList.remove('active');
+                    subcategoryList.classList.remove('active');
+                } else {
+                    // 关闭所有其他分类
+                    document.querySelectorAll('.category-title').forEach(t => {
+                        if (t !== title) {
+                            t.classList.remove('active');
+                            t.nextElementSibling.classList.remove('active');
+                        }
+                    });
+                    
+                    // 展开当前分类
                     title.classList.add('active');
                     subcategoryList.classList.add('active');
                 }
@@ -270,9 +305,20 @@ class StudySystem {
         document.getElementById('questionDetailPage').classList.add('active');
         
         // 填充题目信息
-        document.getElementById('questionTitle').textContent = question.title;
-        document.getElementById('questionCategory').textContent = question.category;
-        document.getElementById('questionSubcategory').textContent = question.subcategory;
+        const titleElement = document.getElementById('questionTitle');
+        titleElement.textContent = question.title;
+        
+        // 让标题在编辑模式下可编辑
+        titleElement.contentEditable = this.canEditQuestion(question);
+        titleElement.addEventListener('blur', () => {
+            if (this.currentQuestion && titleElement.textContent.trim() !== '') {
+                this.currentQuestion.title = titleElement.textContent.trim();
+                this.autoSave();
+            }
+        });
+        
+        // 设置分类显示
+        this.updateCategoryDisplay(question);
         
         // 填充内容
         document.getElementById('questionContent').innerHTML = question.content || '';
@@ -309,6 +355,63 @@ class StudySystem {
         document.getElementById('showThinkingBtn').textContent = '显示思路';
     }
     
+    // 更新分类显示
+    async updateCategoryDisplay(question) {
+        const categoryElement = document.getElementById('questionCategory');
+        const subcategoryElement = document.getElementById('questionSubcategory');
+        const canEdit = this.canEditQuestion(question);
+        
+        if (canEdit && this.isEditMode) {
+            // 编辑模式：显示下拉选择器
+            const categories = await this.getCategories();
+            
+            // 创建分类选择器
+            categoryElement.innerHTML = `
+                <select id="categorySelect" class="category-select">
+                    ${Object.keys(categories).map(cat => 
+                        `<option value="${cat}" ${cat === question.category ? 'selected' : ''}>${cat}</option>`
+                    ).join('')}
+                </select>
+            `;
+            
+            // 创建子分类选择器
+            const updateSubcategorySelect = () => {
+                const selectedCategory = document.getElementById('categorySelect').value;
+                const subcategories = categories[selectedCategory] || [];
+                subcategoryElement.innerHTML = `
+                    <select id="subcategorySelect" class="subcategory-select">
+                        ${subcategories.map(subcat => 
+                            `<option value="${subcat}" ${subcat === question.subcategory ? 'selected' : ''}>${subcat}</option>`
+                        ).join('')}
+                    </select>
+                `;
+                
+                // 绑定子分类变更事件
+                document.getElementById('subcategorySelect').addEventListener('change', (e) => {
+                    if (this.currentQuestion) {
+                        this.currentQuestion.subcategory = e.target.value;
+                        this.autoSave();
+                    }
+                });
+            };
+            
+            updateSubcategorySelect();
+            
+            // 绑定分类变更事件
+            document.getElementById('categorySelect').addEventListener('change', (e) => {
+                if (this.currentQuestion) {
+                    this.currentQuestion.category = e.target.value;
+                    updateSubcategorySelect();
+                    this.autoSave();
+                }
+            });
+        } else {
+            // 只读模式：显示静态文本
+            categoryElement.innerHTML = `<span class="category-badge">${question.category}</span>`;
+            subcategoryElement.innerHTML = `<span class="subcategory-badge">${question.subcategory}</span>`;
+        }
+    }
+    
     // 设置编辑模式
     setEditMode(isEdit) {
         this.isEditMode = isEdit;
@@ -322,6 +425,11 @@ class StudySystem {
         editableElements.forEach(el => {
             el.contentEditable = isEdit;
         });
+        
+        // 更新分类显示
+        if (this.currentQuestion) {
+            this.updateCategoryDisplay(this.currentQuestion);
+        }
         
         // 显示/隐藏高亮工具
         document.getElementById('highlightTools').style.display = isEdit ? 'flex' : 'none';
@@ -484,7 +592,7 @@ class StudySystem {
     }
     
     // 渲染题目列表
-    renderQuestionsList() {
+    async renderQuestionsList() {
         const container = document.getElementById('questionsList');
         const filteredQuestions = this.getFilteredQuestions();
         
@@ -493,12 +601,15 @@ class StudySystem {
             return;
         }
         
-        container.innerHTML = filteredQuestions.map(question => {
+        // 异步生成题目卡片
+        const questionCards = await Promise.all(filteredQuestions.map(async (question) => {
             const canDelete = this.canDeleteQuestion(question);
             const deleteButton = canDelete ? 
                 `<button class="delete-btn" data-id="${question.id}" title="删除题目">
                     <i class="fas fa-trash"></i>
                 </button>` : '';
+            
+            const ownerBadge = await this.getOwnerBadge(question);
             
             return `
                 <div class="question-card" data-id="${question.id}">
@@ -509,7 +620,7 @@ class StudySystem {
                     <div class="meta">
                         <span class="category-badge">${question.category}</span>
                         <span class="subcategory-badge">${question.subcategory}</span>
-                        ${this.getOwnerBadge(question)}
+                        ${ownerBadge}
                     </div>
                     <div class="preview">${this.getPreviewText(question.content)}</div>
                     <div class="question-actions">
@@ -517,7 +628,9 @@ class StudySystem {
                     </div>
                 </div>
             `;
-        }).join('');
+        }));
+        
+        container.innerHTML = questionCards.join('');
         
         // 绑定点击事件
         container.querySelectorAll('.question-card').forEach(card => {
@@ -588,8 +701,8 @@ class StudySystem {
     }
     
     // 过滤题目
-    filterQuestions() {
-        this.renderQuestionsList();
+    async filterQuestions() {
+        await this.renderQuestionsList();
     }
     
     // 获取预览文本
@@ -600,7 +713,7 @@ class StudySystem {
         return text.length > 100 ? text.substring(0, 100) + '...' : text;
     }
     
-    getOwnerBadge(question) {
+    async getOwnerBadge(question) {
         const currentUserId = window.authManager?.user?.id;
         const isAdmin = window.authManager?.isAdmin();
         
@@ -610,19 +723,55 @@ class StudySystem {
         
         // 如果是管理员，显示详细的创建者信息
         if (isAdmin) {
-            if (question.ownerId && question.ownerId !== currentUserId) {
-                return `<span class="owner-badge">用户: ${question.ownerId}</span>`;
-            } else if (question.createdBy && question.createdBy !== currentUserId) {
-                return `<span class="owner-badge">创建者: ${question.createdBy}</span>`;
+            if (question.createdBy && question.createdBy !== currentUserId) {
+                // 异步获取用户名
+                const creatorName = await this.getUserDisplayName(question.createdBy);
+                return `<span class="owner-badge">创建者: ${creatorName}</span>`;
+            } else if (question.createdBy === currentUserId) {
+                return '<span class="owner-badge owner-self">我的题目</span>';
             }
         } else {
-            // 普通用户只显示是否为他人创建
-            if (question.createdBy && question.createdBy !== currentUserId) {
-                return '<span class="owner-badge">他人创建</span>';
+            // 普通用户显示是否为自己创建
+            if (question.createdBy === currentUserId) {
+                return '<span class="owner-badge owner-self">我的题目</span>';
             }
         }
         
         return '';
+    }
+    
+    // 获取用户显示名称
+    async getUserDisplayName(userId) {
+        // 如果是当前用户，直接返回用户名
+        if (window.authManager?.user?.id === userId) {
+            return window.authManager.user.username || userId;
+        }
+        
+        // 检查用户缓存
+        if (!this.userCache) {
+            this.userCache = new Map();
+        }
+        
+        if (this.userCache.has(userId)) {
+            return this.userCache.get(userId);
+        }
+        
+        // 从服务器获取用户信息
+        try {
+            if (window.authManager && window.authManager.isLoggedIn()) {
+                const response = await window.authManager.apiRequest(`/auth/users/${userId}`, 'GET');
+                const username = response.username || userId;
+                this.userCache.set(userId, username);
+                return username;
+            }
+        } catch (error) {
+            console.warn('获取用户信息失败:', error);
+        }
+        
+        // 如果获取失败，显示用户ID的前8位
+        const fallbackName = userId.length > 8 ? userId.substring(0, 8) + '...' : userId;
+        this.userCache.set(userId, fallbackName);
+        return fallbackName;
     }
     
     // 添加到历史记录
@@ -887,16 +1036,16 @@ class StudySystem {
                     this.questions = response;
                 } else {
                     console.error('加载云端题目失败');
-                    this.loadLocalQuestions();
+                    this.questions = this.loadLocalQuestions();
                 }
             } else {
-                this.loadLocalQuestions();
+                this.questions = this.loadLocalQuestions();
             }
             
             this.renderQuestionsList();
         } catch (error) {
             console.error('加载题目失败:', error);
-            this.loadLocalQuestions();
+            this.questions = this.loadLocalQuestions();
             this.renderQuestionsList();
         }
     }
@@ -906,7 +1055,334 @@ class StudySystem {
         return saved ? JSON.parse(saved) : [];
     }
     
-    async saveHistory() {
+    // 初始化分类管理功能
+    initCategoryManagement() {
+        document.getElementById('addCategoryBtn')?.addEventListener('click', () => {
+            this.showAddCategoryModal();
+        });
+        
+        document.getElementById('editCategoriesBtn')?.addEventListener('click', async () => {
+            await this.showEditCategoriesModal();
+        });
+    }
+    
+    // 根据用户角色更新UI
+    updateUIForUserRole() {
+        const isAdmin = window.authManager && window.authManager.isAdmin();
+        const categoryManagement = document.getElementById('categoryManagement');
+        
+        if (categoryManagement) {
+            categoryManagement.style.display = isAdmin ? 'block' : 'none';
+        }
+    }
+    
+    // 显示添加分类模态框
+        showAddCategoryModal() {
+            document.getElementById('addCategoryModal').classList.add('active');
+        }
+    
+    // 显示编辑分类模态框
+        async showEditCategoriesModal() {
+            document.getElementById('editCategoriesModal').classList.add('active');
+            await renderEditCategoriesList();
+        }
+    
+    // 获取分类配置
+    async getCategories() {
+        try {
+            // 如果是管理员，从服务器获取分类配置
+            if (isAdmin()) {
+                const response = await fetch('/api/data/categories', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (response.ok) {
+                    return await response.json();
+                }
+            }
+            
+            // 非管理员或获取失败时，使用本地存储的分类
+            const stored = localStorage.getItem('studySystem_categories');
+            if (stored) {
+                return JSON.parse(stored);
+            }
+            
+            // 默认分类
+            const defaultCategories = {
+                '申论': {
+                    name: '申论',
+                    icon: 'fas fa-file-alt',
+                    subcategories: ['概括归纳', '提出对策', '分析原因', '综合分析', '公文写作', '大作文']
+                },
+                '行测': {
+                    name: '行测',
+                    icon: 'fas fa-calculator',
+                    subcategories: ['政治常识', '常识', '言语', '数量', '判断', '资料']
+                }
+            };
+            
+            // 非管理员时保存到本地存储
+            if (!isAdmin()) {
+                localStorage.setItem('studySystem_categories', JSON.stringify(defaultCategories));
+            }
+            
+            return defaultCategories;
+        } catch (error) {
+            console.error('获取分类失败:', error);
+            
+            // 出错时返回本地存储或默认分类
+            const stored = localStorage.getItem('studySystem_categories');
+            if (stored) {
+                return JSON.parse(stored);
+            }
+            
+            return {
+                '申论': {
+                    name: '申论',
+                    icon: 'fas fa-file-alt',
+                    subcategories: ['概括归纳', '提出对策', '分析原因', '综合分析', '公文写作', '大作文']
+                },
+                '行测': {
+                    name: '行测',
+                    icon: 'fas fa-calculator',
+                    subcategories: ['政治常识', '常识', '言语', '数量', '判断', '资料']
+                }
+            };
+        }
+    }
+    
+    // 保存分类配置
+    async saveCategories(categories) {
+        try {
+            // 如果是管理员，保存到服务器
+            if (isAdmin()) {
+                const response = await fetch('/api/data/categories', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({ categories })
+                });
+                
+                if (response.ok) {
+                    console.log('分类配置已保存到服务器');
+                } else {
+                    throw new Error('保存到服务器失败');
+                }
+            } else {
+                // 非管理员保存到本地存储
+                localStorage.setItem('studySystem_categories', JSON.stringify(categories));
+            }
+            
+            // 更新UI
+            await this.renderCategoryNavigation();
+            this.updateCategoryFilters();
+        } catch (error) {
+            console.error('保存分类失败:', error);
+            // 出错时仍然保存到本地存储作为备份
+            localStorage.setItem('studySystem_categories', JSON.stringify(categories));
+            await this.renderCategoryNavigation();
+            this.updateCategoryFilters();
+        }
+    }
+    
+    // 添加新分类
+    async addNewCategory(categoryName, subcategories = []) {
+        const categories = await this.getCategories();
+        
+        if (categories[categoryName]) {
+            alert('分类已存在！');
+            return;
+        }
+        
+        categories[categoryName] = {
+            name: categoryName,
+            icon: 'fas fa-folder',
+            subcategories: subcategories
+        };
+        
+        await this.saveCategories(categories);
+    }
+    
+    // 删除分类
+    async deleteCategory(categoryName) {
+        const categories = await this.getCategories();
+        
+        if (!categories[categoryName]) {
+            alert('分类不存在！');
+            return;
+        }
+        
+        if (confirm(`确定要删除分类 "${categoryName}" 吗？\n\n注意：删除分类不会删除相关题目，但会影响题目的分类显示。`)) {
+            delete categories[categoryName];
+            await this.saveCategories(categories);
+            alert('分类删除成功！');
+        }
+    }
+    
+    // 重新渲染分类导航
+    async renderCategoryNavigation() {
+        const categories = await this.getCategories();
+        const categoryNav = document.querySelector('.category-nav');
+        
+        if (!categoryNav) return;
+        
+        categoryNav.innerHTML = '';
+        
+        Object.values(categories).forEach(category => {
+            const categoryGroup = document.createElement('div');
+            categoryGroup.className = 'category-group';
+            
+            categoryGroup.innerHTML = `
+                <h3 class="category-title" data-category="${category.name}">
+                    <i class="${category.icon}"></i> ${category.name}
+                    <i class="fas fa-chevron-down toggle-icon"></i>
+                </h3>
+                <ul class="subcategory-list">
+                    ${category.subcategories.map(sub => 
+                        `<li data-subcategory="${sub}">${sub}</li>`
+                    ).join('')}
+                </ul>
+            `;
+            
+            categoryNav.appendChild(categoryGroup);
+        });
+        
+        // 重新绑定事件
+        this.initCategoryNavigation();
+    }
+    
+    // 更新分类过滤器
+    async updateCategoryFilters() {
+        const categories = await this.getCategories();
+        const categoryFilter = document.getElementById('categoryFilter');
+        
+        if (!categoryFilter) return;
+        
+        categoryFilter.innerHTML = '<option value="">所有分类</option>';
+        
+        Object.keys(categories).forEach(categoryName => {
+            categoryFilter.innerHTML += `<option value="${categoryName}">${categoryName}</option>`;
+        });
+    }
+}
+
+// 分类管理模态框函数
+function closeAddCategoryModal() {
+    document.getElementById('addCategoryModal').classList.remove('active');
+    // 清空表单
+    document.getElementById('categoryName').value = '';
+    const subcategoryList = document.getElementById('subcategoryList');
+    subcategoryList.innerHTML = `
+        <div class="subcategory-item">
+            <input type="text" placeholder="请输入子分类名称">
+            <button class="btn btn-danger btn-sm" onclick="removeSubcategory(this)">删除</button>
+        </div>
+    `;
+}
+
+function closeEditCategoriesModal() {
+    document.getElementById('editCategoriesModal').classList.remove('active');
+}
+
+function addSubcategoryInput() {
+    const subcategoryList = document.getElementById('subcategoryList');
+    const newItem = document.createElement('div');
+    newItem.className = 'subcategory-item';
+    newItem.innerHTML = `
+        <input type="text" placeholder="请输入子分类名称">
+        <button class="btn btn-danger btn-sm" onclick="removeSubcategory(this)">删除</button>
+    `;
+    subcategoryList.appendChild(newItem);
+}
+
+function removeSubcategory(button) {
+    const subcategoryList = document.getElementById('subcategoryList');
+    if (subcategoryList.children.length > 1) {
+        button.parentElement.remove();
+    } else {
+        alert('至少需要保留一个子分类');
+    }
+}
+
+async function saveNewCategory() {
+    const categoryName = document.getElementById('categoryName').value.trim();
+    if (!categoryName) {
+        alert('请输入分类名称');
+        return;
+    }
+
+    const subcategoryInputs = document.querySelectorAll('#subcategoryList input');
+    const subcategories = [];
+    
+    subcategoryInputs.forEach(input => {
+        const value = input.value.trim();
+        if (value) {
+            subcategories.push(value);
+        }
+    });
+
+    if (subcategories.length === 0) {
+        alert('请至少添加一个子分类');
+        return;
+    }
+
+    // 检查分类是否已存在
+    const categories = await window.studySystem.getCategories();
+    if (categories[categoryName]) {
+        alert('该分类已存在');
+        return;
+    }
+
+    // 添加新分类
+    await window.studySystem.addNewCategory(categoryName, subcategories);
+    closeAddCategoryModal();
+    alert('分类添加成功');
+}
+
+async function renderEditCategoriesList() {
+    const categoryList = document.getElementById('categoryList');
+    const categories = await window.studySystem.getCategories();
+    
+    categoryList.innerHTML = '';
+    
+    Object.keys(categories).forEach(categoryName => {
+        const categoryItem = document.createElement('div');
+        categoryItem.className = 'category-item';
+        
+        const categoryData = categories[categoryName];
+        const subcategories = categoryData.subcategories || [];
+        const subcategoriesHtml = subcategories.map(sub => 
+            `<span class="subcategory-tag">${sub}</span>`
+        ).join('');
+        
+        categoryItem.innerHTML = `
+            <h5>
+                ${categoryName}
+                <button class="btn btn-danger btn-sm" onclick="deleteCategoryConfirm('${categoryName}')">删除</button>
+            </h5>
+            <div class="subcategories">
+                ${subcategoriesHtml}
+            </div>
+        `;
+        
+        categoryList.appendChild(categoryItem);
+    });
+}
+
+async function deleteCategoryConfirm(categoryName) {
+    if (confirm(`确定要删除分类"${categoryName}"吗？这将同时删除该分类下的所有题目。`)) {
+        await window.studySystem.deleteCategory(categoryName);
+        await renderEditCategoriesList();
+        alert('分类删除成功');
+    }
+}
+
+// StudySystem类的其他方法继续
+StudySystem.prototype.saveHistory = async function() {
         localStorage.setItem('studySystem_history', JSON.stringify(this.history));
         
         // 云端同步
@@ -919,14 +1395,14 @@ class StudySystem {
                 console.warn('历史记录云端同步失败:', error.message);
             }
         }
-    }
-    
-    loadHistory() {
+    };
+
+StudySystem.prototype.loadHistory = function() {
         const saved = localStorage.getItem('studySystem_history');
         return saved ? JSON.parse(saved) : [];
-    }
-    
-    async saveTags() {
+    };
+
+StudySystem.prototype.saveTags = async function() {
         localStorage.setItem('studySystem_tags', JSON.stringify(this.tags));
         
         // 云端同步
@@ -939,14 +1415,14 @@ class StudySystem {
                 console.warn('标签云端同步失败:', error.message);
             }
         }
-    }
-    
-    loadTags() {
+    };
+
+StudySystem.prototype.loadTags = function() {
         const saved = localStorage.getItem('studySystem_tags');
         return saved ? JSON.parse(saved) : ['重要', '难点', '易错', '常考'];
-    }
-    
-    async saveAnnotations() {
+    };
+
+StudySystem.prototype.saveAnnotations = async function() {
         if (this.currentQuestion) {
             const key = `studySystem_annotations_${this.currentQuestion.id}`;
             localStorage.setItem(key, JSON.stringify(this.annotations));
@@ -962,9 +1438,9 @@ class StudySystem {
                 }
             }
         }
-    }
-    
-    loadAnnotations(questionId) {
+    };
+
+StudySystem.prototype.loadAnnotations = function(questionId) {
         const key = `studySystem_annotations_${questionId}`;
         const saved = localStorage.getItem(key);
         this.annotations = saved ? JSON.parse(saved) : {};
@@ -977,10 +1453,10 @@ class StudySystem {
             document.getElementById('annotationsContainer').innerHTML = 
                 '<div class="no-annotations">点击高亮文字查看批注</div>';
         }
-    }
-    
-    // 显示所有批注
-    showAllAnnotations() {
+    };
+
+// 显示所有批注
+StudySystem.prototype.showAllAnnotations = function() {
         const container = document.getElementById('annotationsContainer');
         const highlights = document.querySelectorAll('.highlight');
         
@@ -1026,10 +1502,10 @@ class StudySystem {
                 });
             });
         }
-    }
-    
-    // 高亮对应的文字
-    highlightCorrespondingText(highlightId) {
+    };
+
+// 高亮对应的文字
+StudySystem.prototype.highlightCorrespondingText = function(highlightId) {
         // 移除之前的临时高亮
         document.querySelectorAll('.temp-highlight').forEach(el => {
             el.classList.remove('temp-highlight');
@@ -1046,8 +1522,7 @@ class StudySystem {
                 targetHighlight.classList.remove('temp-highlight');
             }, 3000);
         }
-    }
-}
+    };
 
 // 初始化应用
 document.addEventListener('DOMContentLoaded', () => {
